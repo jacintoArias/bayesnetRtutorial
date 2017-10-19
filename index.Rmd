@@ -1,0 +1,171 @@
+---
+title: "Introductory tutorial on Bayesian networks in R"
+author: "Jacinto Arias"
+date: "Last Update October 20, 2017"
+output:
+  html_notebook:
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+
+# Introduction
+
+In this tutorial we will learn some of the basics of Bayesian Networks by solving a simulated problem. Our agenda will include:
+
+* A quick brackground review on the packages we will be using (`tidyverse` and `bnlearn`)
+* A statistical approach to the problem at hand
+* Modeling with epert knowledge
+* Learning parameters from data with latent variables
+* Probability queries and simulation
+* Advanced use cases
+
+# Aside: The tidyverse
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(tidyverse)
+```
+
+# The bnlearn package
+
+The `bnlearn` package is the most complete and popular package for Bayesian Networks available to the date in R. We will start our tutorial by reviewing some of its capacities.
+
+First we should install and **load** the package:
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+library(bnlearn)
+```
+
+*Please make sure that you either download or compile at least `bnelarn 4.2.x` as previous versions might have some bugs.
+
+You should check out the documentation that is available online [[Link]](http://bnlearn.com). It contains nice examples and additional use cases beyond this tutorial, if you are interested in this topic there are a couple of related books written by the author of the package, you can find the references in the mentioned website.
+
+## Data Structures
+
+The usage of bnlearn revolves around the usage of two main **data structures** to represent a Bayesian Network in different stages (NOTE that these are *S3* classes and the names might overlap with other functions):
+
+* `bn` [[Docs]](http://www.bnlearn.com/documentation/man/bn.class.html). Represents the structural information, variables, graph and learning algorithm if provided.
+* `bn.fit` [[Docs]](http://www.bnlearn.com/documentation/man/bn.fit.class.html). Adds the parametric information on top of the previous structure. Contains the distribution of each node according to its type and parent configuration.
+
+## Creating the structure of Bayesian networks
+
+There are different ways to manually initialize and modify the graph of a Bayesian Network.
+
+We can create empty graphs from a set of variables:
+
+```{r}
+vars <- LETTERS[1:6]
+dag  <- empty.graph(vars)
+
+dag
+```
+
+You can specify arcs sets in various ways. The most common are:
+
+As a two column (`from`, `to`) matrix, setting them via `arcs` to an existing network:
+
+```{r}
+e <- matrix(
+      c("A", "C", "B", "F", "C", "F"),
+      ncol = 2, byrow = TRUE,
+      dimnames = list(NULL, c("from", "to"))
+    )
+
+arcs(dag) <- e
+
+dag
+```
+
+We can also use an adjancecy matrix, and assign it to a dag with `amat`:
+
+```{r}
+adj <- matrix(
+        0L, 
+        ncol = 6, 
+        nrow = 6,
+        dimnames = list(vars, vars)
+       )
+
+adj["A", "C"] = 1L
+adj["B", "F"] = 1L
+adj["C", "F"] = 1L
+adj["D", "E"] = 1L
+adj["A", "E"] = 1L
+print(adj)
+
+amat(dag) <- adj
+
+dag
+```
+
+The last option is to create a *formula* for a given set of variables. Each node is specified by a pair of brackets `[<var_name>]`. If the node has a parentset we denote it by `|` and specify the list of parents separated by colons `:`. We can compute the formula into a `bn` object with `model2network`.
+
+```{r}
+dag <- model2network("[A][C][B|A][D|C][F|A:B:C][E|F]")
+dag
+```
+
+The package provide other capabilities such as **random graphs** and **graph sampling**. In addition there is a range of utilities to manipulate the graphs [[Link]](http://www.bnlearn.com/documentation/man/mb.html) [[Link]](http://www.bnlearn.com/documentation/man/graph.html).
+
+## Plotting graphs
+
+We can ploting graphs using the built in R engine by using `plot` for the `bn` class:
+
+```{r}
+plot(dag)
+```
+
+Minimal aspects of the plot can be customized as documented in the corresponding help page. Other packages can be used indrectly to plot graphs, `bnlearn` provides connections with some of them but be aware that some of them might be outdated.
+
+Fortunatelly, graphs are a common data structure and we can find lots of utilities to work with them. One of the most common visualization tools for graphs, and for data in general, is the D3 library from the *Javascript* domain. Thanks to the integration of **R shiny** with web technologies we can find wonderful ports such as the `networkD3` package.
+
+The next snippet is just a custom function to transform a `bn` object to the required information to plot a *D3 force graph*.
+
+*Please install* the `networkD3`, be carefull as this package is currently under beta development and future version could break this code.
+
+```{r}
+plotD3bn <- function(bn) {
+  varNames <- nodes(bn)
+
+  # Nodes should be zero indexed!
+  links <- data.frame(arcs(bn)) %>%
+    mutate(from = match(from, varNames)-1, to = match(to, varNames)-1, value = 1)
+  
+  nodes <- data.frame(name = varNames) %>%
+    mutate(group = 1, size = 30)
+  
+  networkD3::forceNetwork(
+    Links = links,  
+    Nodes = nodes,
+    Source = "from",
+    Target = "to",
+    Value = "value",
+    NodeID = "name",
+    Group = "group",
+    fontSize = 20,
+    zoom = TRUE,
+    arrows = TRUE,
+    bounded = TRUE,
+    opacityNoHover = 1
+  )
+}
+```
+
+
+We can now plot our last generated BN. If the result looks too small you can zoom in and out using your *mouse wheel*.
+
+
+```{r}
+plotD3bn(dag)
+```
+
+## Loading a Bayesian network from a file
+
+There are different file formats to represent a Bayesian network. They have originated over the years as an effort to create standards or as part of particular propietary systems. Despite the effort there is not a consensuated closed standard, perhaps the closest one is the `xbif` format [[Link]](http://www.cs.cmu.edu/~fgcozman/Research/InterchangeFormat/).
+
+`bnlearn` provides several ways to load a B
+
+# License
+
+This tutorial is licensed under [GPL3 license](https://www.gnu.org/licenses/lgpl-3.0.en.html) as is originally published and maintained in this [github repository](https://github.com/jacintoArias/bayesnetRtutorial) by [Jacinto Arias](http://jarias.es)
+
