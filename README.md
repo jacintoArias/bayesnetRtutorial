@@ -1,2 +1,2 @@
 # bayesnetRtutorial
-Rmd notebook containing a gentle tutorial on Bayesian networks in R
+Rmd notebook containing an introductory tutorial on Bayesian networks in R
