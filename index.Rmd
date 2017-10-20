@@ -396,14 +396,17 @@ For example we could ask,  *what is the posibility of a positive cancer diagnosi
 cpquery(asia, event = lung == "yes", evidence = TRUE)
 ```
 ```{r}
-cpquery(asia, event = lung == "yes", evidence = (smoke == "yes"))
+cpquery(asia, event = lung == "yes", evidence = list(smoke = "yes"), method = "lw", n = 100000)
 ```
 
 Notice that the method is not much stable, so it is better to aggregate a repeated sample of predictions:
 
 ```{r}
-print(mean(rep(cpquery(asia, event = lung == "yes", evidence = TRUE), 1000)))
-print(mean(rep(cpquery(asia, event = lung == "yes", evidence = (smoke == "yes")), 1000)))
+query <- cpquery(asia, event = lung == "yes", evidence = TRUE)
+print(mean(rep(query, 1000)))
+
+query <- cpquery(asia, event = lung == "yes", evidence = list(smoke = "yes"), method = "lw", n = 100000)
+print(mean(rep(query, 1000)))
 ```
 
 The other option is to use `cpdist` to sample cases from the network for a set of nodes in the presence of some evidence, the usage is the same, and we can obtain more stability by increasing the size of the sample.
@@ -420,7 +423,7 @@ summary(s)
 ```
 
 ```{r}
-print(sum(s=="no")/nrow(s))
+prop.table(table(s))
 ```
 
 
@@ -850,6 +853,209 @@ heatAlarmModel$Temp
 ```
 
 We have a complete model now, with a modelled anomaly detection schema. Lets test some queries.
+
+
+```{r}
+e <- list( "Season" = SeasonStates$Winter, "TS1" = 23, "TS2" = 33, "TS3" = 29 )
+query <- cpquery(heatAlarmModel, event = Alarm == "yes", evidence = e, method = "lw", n = 100000)
+print(mean(rep(query, 10000)))
+```
+
+This temperature is too high for winter, so the alarm is likely to go up.
+
+```{r}
+e <- list( "Season" = SeasonStates$Summer, "TS1" = 23, "TS2" = 33, "TS3" = 29 )
+query <- cpquery(heatAlarmModel, event = Alarm == "yes", evidence = e, method = "lw", n = 100000)
+print(mean(rep(query, 10000)))
+```
+
+However this is a good fit for the higher temperatures that are registered in summer.
+
+
+## More anomalies
+
+We could model additional anomalies for the individual malfunctioning of each sensor. In that case we could observe either global temperature anomalies or individual malfunctions.
+
+A common pattern is to add a new hidden discrete variable conditioning each sensor with a random distribution in the case of malfunction.
+
+```{r}
+# New Variables
+TS1FaultStates <- list(
+  No  = "no",
+  Yes = "yes"
+)
+
+dataLatent <- dataLatentSeason %>%
+  mutate(
+    Alarm = factor(AlarmStates$No, levels = AlarmStates),
+    TS1Fault = factor(TS1FaultStates$No, levels = TS1FaultStates)
+  ) %>%
+  select(Alarm, Season, Temp, TS1Fault, TS1, TS2, TS3) %>%
+  as.data.frame()
+
+dataImputed <- dataLatent %>% 
+  rowwise() %>% 
+  mutate(Temp = mean(c(TS1, TS2, TS3))) %>%
+  as.data.frame()
+
+heatAlarmDag <- model2network("[Alarm][Season][TS1Fault][Temp|Season:Alarm][TS1|Temp:TS1Fault][TS2|Temp][TS3|Temp]")
+plotD3bn(heatAlarmDag)
+```
+
+We launch EM and modify the new probability of the nodes (now Alarm and TS1 Fault). For that we need additional exprt knowledge from the domain. We ask our IoT team about the fault tolerance of our sensors. They tell us the following>
+
+> Our sensors are the best, they usually do not fail. The testing guys estimate just a 1/1000 failures.
+
+This is good, with this marginal error probbility out new node will only detect anomalies without introducing noise in the remaining propagation within the model.
+
+```{r}
+heatAlarmModel <- parametric.em(heatAlarmDag, dataLatent, dataImputed, iter = 10)
+```
+
+```{r}
+# TODO: Please dont do this, this is not DRY...
+cptAlarm[] <- c(0.999, 0.001)
+heatAlarmModel$Alarm <- cptAlarm
+cgaussTemp <- coef(heatAlarmModel$Temp)
+sdTemp     <- heatAlarmModel$Temp$sd
+cgaussTemp[is.nan(cgaussTemp)] <- cgaussTemp[!is.nan(cgaussTemp)] + 10
+sdTemp[is.nan(sdTemp)] <- sdTemp[!is.nan(sdTemp)]
+heatAlarmModel$Temp <- list( coef = cgaussTemp, sd = sdTemp)
+```
+
+
+```{r}
+cptTS1Fault <- coef(heatAlarmModel$TS1Fault)
+print(cptTS1Fault)
+```
+
+```{r}
+cptTS1Fault[] <- c(0.9999, 0.0001)
+heatAlarmModel$TS1Fault <- cptTS1Fault
+print(heatAlarmModel$TS1Fault)
+```
+
+And now for the TS1 node, in which we have to add a random distribution. We can use a Gaussian with lots of variance.
+
+```{r}
+cgaussTS1 <- coef(heatAlarmModel$TS1)
+sdTS1     <- heatAlarmModel$TS1$sd
+print(cgaussTS1)
+print(sdTS1)
+```
+
+```{r}
+cgaussTS1[is.nan(cgaussTS1)] <- 0
+sdTS1[is.nan(sdTS1)] <- 1000000
+
+heatAlarmModel$TS1 <- list( coef = cgaussTS1, sd = sdTS1)
+heatAlarmModel$TS1
+```
+
+Lets test some inference cases in which the TS1 sensor is malfunctioning or reporting some kind of anomalous measures.
+
+If TS1 is only one capturing a very high temperature the fault node will detect the anomaly
+
+```{r}
+e <- list( "Season" = SeasonStates$Winter, "TS1" = 35, "TS2" = 24, "TS3" = 20 )
+query <- cpquery(heatAlarmModel, event = Alarm == "yes", evidence = e, method = "lw", n = 100000)
+print(mean(rep(query, 10000)))
+```
+
+```{r}
+e <- list( "Season" = SeasonStates$Winter, "TS1" = 35, "TS2" = 24, "TS3" = 20 )
+query <- cpquery(heatAlarmModel, event = TS1Fault == "yes", evidence = e, method = "lw", n = 100000)
+print(mean(rep(query, 10000)))
+```
+
+If the three sensors are capturing the same anomaly, then the TS1Fault node will assume that the problem is outside the model.
+
+```{r}
+e <- list( "Season" = SeasonStates$Winter, "TS1" = 35, "TS2" = 37, "TS3" = 29 )
+query <- cpquery(heatAlarmModel, event = Alarm == "yes", evidence = e, method = "lw", n = 100000)
+print(mean(rep(query, 10000)))
+```
+
+```{r}
+e <- list( "Season" = SeasonStates$Winter, "TS1" = 35, "TS2" = 37, "TS3" = 29 )
+query <- cpquery(heatAlarmModel, event = TS1Fault == "yes", evidence = e, method = "lw", n = 100000)
+print(mean(rep(query, 10000)))
+```
+
+
+
+## A more complex problem
+
+This is a variation on the previous problem. Can you spot the differences introduced by this new version?
+
+```{r}
+dataRaw <- read_csv("./data/heatAlarm-lvl2.csv")
+```
+
+It seems that the measures are somehow dependent, but the relationship is not that clear that in the previous phase. An ex
+
+```{r}
+dataRaw %>%
+  gather("Sensor", "Measure", TS1, TS2, TS3) %>%
+  ggplot(aes(x=Date, y=Measure, group=Sensor, color=Sensor)) +
+  geom_line()
+
+dataRaw %>%
+  gather("Sensor", "Measure", TS1, TS2, TS3) %>%
+  ggplot(aes(x=Date, y=Measure, group=Sensor, color=Sensor)) +
+  geom_smooth()
+```
+
+### Looking at the context
+
+> Our experts tell us that the indoor temperature of the room is affected by the outdoor weather, specially near the windows and doors. The temperature in the interior part of the room is more stable.
+
+Given this new knowledge we decide to place a new sensor outdoors `TSO`. Now we can have an additional component to add to our model, hopefully it will allow to mixture the indoor and outdoor temperatures.
+
+```{r}
+dataRaw %>%
+  gather("Sensor", "Measure", TSO, TS1, TS2, TS3) %>%
+  ggplot(aes(x=Date, y=Measure, group=Sensor, color=Sensor)) +
+  geom_smooth()
+```
+
+```{r}
+dataByMonth <- dataRaw %>%
+  mutate(Month = as.factor(month(Date, label = TRUE, abbr = TRUE)))
+
+dataByMonth %>%
+  gather("Sensor", "Measure", TSO, TS1, TS2, TS3) %>%
+  ggplot(aes(x=Measure, color=Sensor, fill=Sensor)) + 
+    geom_density(alpha=0.5) +
+    facet_wrap(~Month)
+```
+
+```{r}
+dataBySeason <- dataByMonth %>%
+  mutate(Season = season(Date))
+
+dataBySeason %>%
+  gather("Sensor", "Measure", TSO, TS1, TS2, TS3) %>%
+  ggplot(aes(x=Measure, color=Sensor, fill=Sensor)) + 
+    geom_density(alpha=0.4) +
+    facet_wrap(~Season)
+```
+
+### Adding new components to the model
+
+To add the new sensor to the model we are going to need an additional latent variable. Our model will now have two latent variables to model the temperature `TInd` and `TOut` (indoor and outdoor). The Indoor temperature will depend on the outdoor temperature. Lets build it:
+
+```{r}
+heatAlarmDag2 <- model2network("[Alarm][Season][TOut|Season][TS0|TOut][TInd|TOut:Alarm][TS1|TInd][TS2|TInd][TS3|TInd]")
+
+plotD3bn(heatAlarmDag2)
+```
+
+This model is the base example of the new domain. However we can have some doubts regarding the relationship of the variable TOut and the models, look closely at the distributions and you will see that not all distributions are affected equally by the outdoor temperature. We ask again...
+
+> IoT team: Uh, yes. We instaled TS1 in a corner of the room, near the entrance. TS2 is on the ceiling and might be near a ventilation shaft, so it will probably capture a bit more of heat from the machines. TS3 should be more stable, it is located in the middle of the room.
+
+This almost make sense visually. However, at this point we will need to test the different structures, either by learning all of them and comparing with BIC, or running a structural learning process.
 
 ---
 
