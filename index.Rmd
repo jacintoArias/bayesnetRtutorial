@@ -420,6 +420,11 @@ summary(s)
 ```
 
 ```{r}
+print(sum(s=="no")/nrow(s))
+```
+
+
+```{r}
 ggplot(s, aes(x=lung)) + geom_bar()
 ```
 
@@ -678,12 +683,12 @@ The distributions for the season discrimination seems less Gaussian, but they en
 First we will model the Month based one :
 
 ```{r}
-dataLatent <- dataByMonth %>%
+dataLatentMonth <- dataByMonth %>%
   mutate(Temp = NA) %>%
   select(Month, Temp, TS1, TS2, TS3) %>%
   as.data.frame()
 
-dataLatent$Temp <- as.numeric(dataLatent$Temp)
+dataLatentMonth$Temp <- as.numeric(dataLatentMonth$Temp)
 ```
 
 And now we model the network DAG
@@ -696,18 +701,20 @@ plotD3bn(heatAlarmDagMonth)
 Lets repeat the EM example and induce the parameters of the hidden variable with the previous successful configuration.
 
 ```{r}
-dataImputed <- dataLatent %>% 
+dataImputedMonth <- dataLatentMonth %>% 
   rowwise() %>% 
   mutate(Temp = mean(c(TS1, TS2, TS3))) %>%
   as.data.frame()
 ```
 
 ```{r}
-heatAlarmModelMonth <- parametric.em(heatAlarmDagMonth, dataLatent, dataImputed, iter = 10)
+heatAlarmModelMonth <- parametric.em(heatAlarmDagMonth, dataLatentMonth, dataImputedMonth, iter = 10)
 ```
 
 ```{r}
-impute(heatAlarmModelMonth, data = dataLatent, method = "bayes-lw") %>%
+dataImputeMonthPosterior <- impute(heatAlarmModelMonth, data = dataLatentMonth, method = "bayes-lw")
+
+dataImputeMonthPosterior %>%
   gather("Sensor", "Measure", Temp, TS1, TS2, TS3) %>%
   ggplot(aes(x=Measure, color=Sensor, fill=Sensor)) + 
     geom_density(alpha=0.5) +
@@ -717,16 +724,16 @@ impute(heatAlarmModelMonth, data = dataLatent, method = "bayes-lw") %>%
 This is a very good fit indeed. We can see that Temp is almost identical to TS3, and that the other two sensors are just transformations of this variable. Lets check it the season is a good simplification of the Month variable.
 
 ```{r}
-dataLatent <- dataBySeason %>%
+dataLatentSeason <- dataBySeason %>%
   mutate(Temp = NA) %>%
   select(Season, Temp, TS1, TS2, TS3) %>%
   as.data.frame()
 
-dataLatent$Temp <- as.numeric(dataLatent$Temp)
+dataLatentSeason$Temp <- as.numeric(dataLatentSeason$Temp)
 
 heatAlarmDagSeason <- model2network("[Season][Temp|Season][TS1|Temp][TS2|Temp][TS3|Temp]")
 
-dataImputed <- dataLatent %>% 
+dataImputedSeason <- dataLatentSeason %>% 
   rowwise() %>% 
   mutate(Temp = mean(c(TS1, TS2, TS3))) %>%
   as.data.frame()
@@ -735,11 +742,13 @@ dataImputed <- dataLatent %>%
 With that configuration we run the EM
 
 ```{r}
-heatAlarmModelSeason <- parametric.em(heatAlarmDagSeason, dataLatent, dataImputed, iter = 10)
+heatAlarmModelSeason <- parametric.em(heatAlarmDagSeason, dataLatentSeason, dataImputedSeason, iter = 10)
 ```
 
 ```{r}
-impute(heatAlarmModelSeason, data = dataLatent, method = "bayes-lw") %>%
+dataImputeSeasonPosterior <- impute(heatAlarmModelSeason, data = dataLatentSeason, method = "bayes-lw")
+
+dataImputeSeasonPosterior %>%
   gather("Sensor", "Measure", Temp, TS1, TS2, TS3) %>%
   ggplot(aes(x=Measure, color=Sensor, fill=Sensor)) + 
     geom_density(alpha=0.5) +
@@ -749,25 +758,8 @@ impute(heatAlarmModelSeason, data = dataLatent, method = "bayes-lw") %>%
 Another good fit. Which one of the two approaches is better?. The initial guess should be the Season one, as it has fewer parameters than using the Month. Let's ask the BIC score.
 
 ```{r}
-dataLatent <- dataBySeason %>%
-  mutate(Temp = NA) %>%
-  select(Season, Temp, TS1, TS2, TS3) %>%
-  as.data.frame()
-dataLatent$Temp <- as.numeric(dataLatent$Temp)
-
-sampleSeason <- impute(heatAlarmModelSeason, data = dataLatent, method = "bayes-lw")
-
-
-dataLatent <- dataByMonth %>%
-  mutate(Temp = NA) %>%
-  select(Month, Temp, TS1, TS2, TS3) %>%
-  as.data.frame()
-dataLatent$Temp <- as.numeric(dataLatent$Temp)
-
-sampleMonth  <- impute(heatAlarmModelMonth, data = dataLatent, method = "bayes-lw")
-
-print(BIC(heatAlarmModelSeason, sampleSeason))
-print(BIC(heatAlarmModelMonth, sampleMonth))
+print(BIC(heatAlarmModelSeason, dataImputeSeasonPosterior))
+print(BIC(heatAlarmModelMonth, dataImputeMonthPosterior))
 ```
 As expected, season is by far more superior at minimizing BIC than month and should be our pick.
 
@@ -780,7 +772,84 @@ We call BNs open box models because we can understand and interpretate the param
 
 If the events cannot be observed we would not have available data to learn from. In our example we would have to destroy machines and lit the room on fire to capture data about anomalies, and that would surely have a high cost. Imagine other scenarios such as rare diseases, autonomous driving or financial fraud.
 
+We will start by modeling a global fault by adding a new variable `Alarm`, this variable will have two states `yes` and `no`. In this example we have been collecting data from the sensors for a year, we assume that the functioning has been correct and that there has not been recorder failures (perhaps because the expert technicians that maintain the room have assured us so).
 
+Given this, the Alarm variable will be always observed to `no`.
+
+```{r}
+# New Variables
+AlarmStates <- list(
+  No  = "no",
+  Yes = "yes"
+)
+
+dataLatent <- dataLatentSeason %>%
+  mutate(Alarm = factor(AlarmStates$No, levels = AlarmStates)) %>%
+  select(Alarm, Season, Temp, TS1, TS2, TS3) %>%
+  as.data.frame()
+```
+
+And now the new dag:
+
+```{r}
+heatAlarmDag <- model2network("[Alarm][Season][Temp|Season:Alarm][TS1|Temp][TS2|Temp][TS3|Temp]")
+plotD3bn(heatAlarmDag)
+```
+
+Lets run the EM algorithm one more time, ther should be no changes to the parameters but it will reinforce our logical pipeline.
+
+```{r}
+dataImputed <- dataLatent %>% 
+  rowwise() %>% 
+  mutate(Temp = mean(c(TS1, TS2, TS3))) %>%
+  as.data.frame()
+```
+
+```{r}
+heatAlarmModel <- parametric.em(heatAlarmDag, dataLatent, dataImputed, iter = 10)
+```
+
+Lets check the result on the Alarm variable:
+
+```{r}
+heatAlarmModel$Alarm
+```
+
+Obviously the algorithm will fit all the cases to the observed population in which no alarms have occurred. Here is where the **expert knowledge** enters. We will contact our experts and design a proper parametrization of the variable.
+
+> "The system has a random failure rate of 1/1000, in such cases, the room temperature is quickly raised about 10".
+
+We have enough information to include this expert knowledge into de Alarm variable. Notice that this variable introduces additional parameters into the Temp variable that should be modelled to.
+
+```{r}
+cptAlarm <- coef(heatAlarmModel$Alarm)
+print(cptAlarm)
+```
+
+```{r}
+cptAlarm[] <- c(0.999, 0.001)
+heatAlarmModel$Alarm <- cptAlarm
+print(heatAlarmModel$Alarm)
+```
+
+Now for the Temp variable, which a little more complex
+
+```{r}
+cgaussTemp <- coef(heatAlarmModel$Temp)
+sdTemp     <- heatAlarmModel$Temp$sd
+print(cgaussTemp)
+print(sdTemp)
+```
+
+```{r}
+cgaussTemp[is.nan(cgaussTemp)] <- cgaussTemp[!is.nan(cgaussTemp)] + 10
+sdTemp[is.nan(sdTemp)] <- sdTemp[!is.nan(sdTemp)]
+
+heatAlarmModel$Temp <- list( coef = cgaussTemp, sd = sdTemp)
+heatAlarmModel$Temp
+```
+
+We have a complete model now, with a modelled anomaly detection schema. Lets test some queries.
 
 ---
 
