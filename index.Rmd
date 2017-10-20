@@ -9,6 +9,8 @@ output:
     toc_float: yes
 ---
 
+---
+
 # Introduction
 
 In this tutorial we will learn some of the basics of Bayesian Networks by solving a simulated problem. Our agenda will include:
@@ -20,11 +22,38 @@ In this tutorial we will learn some of the basics of Bayesian Networks by solvin
 * Probability queries and simulation
 * Advanced use cases
 
+#### Seed
+
+```{r}
+set.seed(1020)
+```
+
+---
+
 # Aside: The tidyverse
+
+You should know the tidyverse, it makes R easier and more fun.
+
+You can get more information on https://www.tidyverse.org
+
+I really suggest you to take Hadley's Wickham Data Science course http://r4ds.had.co.nz
+
+In this tutorial I will be using the following tidyverse utilities:
+
+* `dplyr` in general
+* `ggplot2` for almost any plot
+* `tidyr` specifically the `gather` function
+* `lubridate` to extract components from Dates
+* `read_r` to read data from csv files
+
+In order to make the tutorial work you should install and load the following packages
 
 ```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
 library(tidyverse)
+library(lubridate)
 ```
+
+---
 
 # The bnlearn package
 
@@ -40,12 +69,14 @@ library(bnlearn)
 
 You should check out the documentation that is available online [[Link]](http://bnlearn.com). It contains nice examples and additional use cases beyond this tutorial, if you are interested in this topic there are a couple of related books written by the author of the package, you can find the references in the mentioned website.
 
+
 ## Data Structures
 
 The usage of bnlearn revolves around the usage of two main **data structures** to represent a Bayesian Network in different stages (NOTE that these are *S3* classes and the names might overlap with other functions):
 
 * `bn` [[Docs]](http://www.bnlearn.com/documentation/man/bn.class.html). Represents the structural information, variables, graph and learning algorithm if provided.
 * `bn.fit` [[Docs]](http://www.bnlearn.com/documentation/man/bn.fit.class.html). Adds the parametric information on top of the previous structure. Contains the distribution of each node according to its type and parent configuration.
+
 
 ## Creating the structure of Bayesian networks
 
@@ -107,6 +138,7 @@ dag
 
 The package provide other capabilities such as **random graphs** and **graph sampling**. In addition there is a range of utilities to manipulate the graphs [[Link]](http://www.bnlearn.com/documentation/man/mb.html) [[Link]](http://www.bnlearn.com/documentation/man/graph.html).
 
+
 ## Plotting graphs
 
 We can ploting graphs using the built in R engine by using `plot` for the `bn` class:
@@ -159,13 +191,601 @@ We can now plot our last generated BN. If the result looks too small you can zoo
 plotD3bn(dag)
 ```
 
-## Loading a Bayesian network from a file
+
+## Loading Bayesian networks from files
 
 There are different file formats to represent a Bayesian network. They have originated over the years as an effort to create standards or as part of particular propietary systems. Despite the effort there is not a consensuated closed standard, perhaps the closest one is the `xbif` format [[Link]](http://www.cs.cmu.edu/~fgcozman/Research/InterchangeFormat/).
 
-`bnlearn` provides several ways to load a B
+`bnlearn` provides several ways to load BNs from different formats [[Docs]](http://www.bnlearn.com/documentation/man/foreign.html). You should use them when importing and exporting to other systems or to share them with other people, if you plan to use just bnlearn you could just save an `rda` file.
+
+
+## The Bayes net repository
+
+The maintainers of `bnlearn` also provide a modern R-focused repository for a series of popular Bayesian networks that have been used extensivelly for benchmarking on the literature.
+
+http://www.bnlearn.com/bnrepository/
+
+In here you can find networks with different properties that can be use to test algorithms or explore this or other BN packages. We will now work with the so popular `asia` network: *Asia* is for BNs what *"iris"* is for statistics.
+
+```{r}
+# This downloads the RData file from the repository and loads it.
+# The bn is loaded into a bn.fit variable called bn
+load(url("http://www.bnlearn.com/bnrepository/asia/asia.rda"))
+asia <- bn
+```
+
+
+## Discrete networks
+
+We will know explore the contents of this variable. As you can see, this not only contains the structure but the parameters as well, but first we will take a look at the structure:
+
+```{r}
+bn.net(asia)
+```
+
+```{r}
+plotD3bn(asia)
+```
+
+Now is the time to review the parameters, this prints each node and the asociated probability table. In this case all variables are **discrete** so the tables would be conditional probability tables.
+
+```{r}
+asia
+```
+
+We can access individual nodes of the net as in a data.frame:
+
+```{r}
+asia$smoke
+```
+
+There is also a function to plot the distributions of discrete networks:
+
+```{r}
+bn.fit.barchart(asia$smoke)
+```
+
+```{r}
+bn.fit.barchart(asia$dysp)
+```
+
+
+## Introducing expert knowledge
+
+We can alter the probability tables of a BN, this is useful to override parameters learnt from data or not observed variables. This method allows us to include expert information from the domain of the problem modelled.
+
+To modify a **conditional probability table** you can just directly replace the existing table in the model by extracting it with `coef`. Be careful to maintain the inherent restrictions of the probability distribution.
+
+```{r}
+cpt <- coef(asia$smoke)
+cpt[] <- c(0.2, 0.8)
+asia$smoke <- cpt
+asia$smoke
+```
+
+
+## Sampling data from a Bayesian network
+
+`bnlearn` introduces an *R like* function to sample data from a given fitted model `rbn`. We will now sample a dataset from *asia* to test learning from data.
+
+```{r}
+# Note that the order of the parameters is inverted from the R sample functions
+sampleAsia <- rbn(x = asia, n = 10000)
+head(sampleAsia)
+```
+
+
+## Parametric learning from data
+
+We can induce the parameters of a Bayesian Network from observed data. `bnlearn` provides different algorithms for that, while Maximum Likelihood Estimation (MLE) is the most common one.
+
+We can invoke the learning algorithm by using the function `bn.fit`. For that we need a DAG and a compatible dataset:
+
+```{r}
+net <- bn.net(asia)
+asiaInduced <- bn.fit(x = net, data = sampleAsia)
+```
+
+We can now compare the two networks, there should be some discrepacies in the induced one. Notice that extremelly marginal probabilities will not be simulated and thus will not have a significant present in the sample.
+
+```{r}
+asiaInduced
+```
+
+## Structural learning
+
+In many ocasions the structure of the model is designed by hand. We usually know the variables of the problems and the different causal patterns from expert knowledge, this descriptive information can be tranfered to the model. This is what we call an open box model and provides a powerful framework for many problems, specially when compared to other models that do not provide a clear interpretation of their parameters.
+
+However, there are many situations in which we would like to automatize the structural learning of a model such as causal patterns discovery or a lack of knowledge of the domain.
+
+In other cases we just want to learn about particular dependency relationships between the variables or select the best structure among a particular set.
+
+`bnlearn` specializes in structural learning, and for this reason it provides a range of algorithms to learn the models. There is a complex taxonomy of such algorithms related to the statistical tests, metrics and heuristics in which they are based. Exact learning is a NP-hard problem and thus several approaches have been proposed.
+
+We will briefly study the `hc` algorithm to learn a full structure and the `BIC` score metric to measure the fit of a particular network with a dataset.
+
+The `hc` algorithm can be simply run from a sample of data, although many options can be set to optimize it for a particular problem.
+
+```{r}
+networkInduced <- hc(x = sampleAsia)
+networkInduced
+```
+
+Lets compare it with the original network **golden model** as the algorithm may have introduced some differences given that we used a small data sample.
+
+```{r}
+modelstring(asia)
+```
+
+We can also compute some metrics to compare the network. The structural Hamming distance determines the amount of discrepancy between the two graphs.
+
+```{r}
+shd(bn.net(asia), networkInduced)
+```
+
+The BIC metric measures the fit of the structure for a given sample, it also penalizes the number of parameters to avoid overfitting. In this case the result is almost the same, the lower the metric the better, so it seems that the induced model could be biased towards the sample and marginally outperforms the golden model.
+
+```{r}
+print(BIC(object = asia, data = sampleAsia))
+print(BIC(object = networkInduced, data = sampleAsia))
+```
+
+
+## Gaussian networks
+
+Gaussian networks differ in the class of probability tables that represent them. If all nodes are gaussian we will find Gaussian nodes and conditional Gaussian nodes. Gaussian nodes are encoded by the normal distribution parameters (mean and sd), conditional gaussian are represented as linear reggresion with a coef for each parent, an intercept term and standard deviation of the residuals.
+
+`bnlearn` has some sample gaussian data to test these BNs:
+
+```{r}
+data(gaussian.test)
+dag = model2network("[A][B][E][G][C|A:B][D|B][F|A:D:E:G]")
+model <- bn.fit(dag, gaussian.test)
+model
+```
+
+To modify a gaussian network node we proceed as in the discrete caser:
+
+```{r}
+model$A <- list(coef = c("(Intercept)" = 10), sd = 0)
+model$A
+
+```
+
+
+## Hybrid networks
+
+An hybrid network contains both discrete and continuous variables. **There is a framework restriction in which a discrete variable cannot have any continuous parent**. The parameters are modelled as in the previous cases.
+
+A continuous variable with discrete parents is represented by a conditional Gaussian distribution, where there is a linear gaussian distribution (according to any continuous parents) for each configuration of the discrete parents.
+
+In the next example we will use `custom.fit` to manually load the parameters into a graph:
+
+```{r}
+net <- model2network("[A][B][C|A:B]")
+
+cptA  <- matrix(c(0.4, 0.6), ncol = 2, dimnames = list(NULL, c("LOW", "HIGH")))
+distB <- list(coef = c("(Intercept)" = 1), sd = 1.5)
+distC <- list(
+  coef = 
+    matrix(
+      c(1.2, 2.3, 3.4, 4.5), 
+      ncol = 2,
+      dimnames = list(c("(Intercept)", "B"), NULL)
+    ),
+    sd = c(0.3, 0.6)
+)
+
+model = custom.fit(net, dist = list(A = cptA, B = distB, C = distC))
+model
+```
+
+## Inference and probability queries
+
+The inference engine of `bnlearn` is limited, but it can be used to test the networks and to perform basic operations with the models.
+
+By using `cpquery` we can ask for the probability of an **event** given a set of evidence, both of them are boolean expressions involving the variables in the model. We may ask for a particular combination of configurations in the BN and a set of observed statuses for the variables in the evidence.
+
+For example we could ask,  *what is the posibility of a positive cancer diagnosis for a person that smokes?*, in the asia network.
+
+(For cpquery I recommend the most powerfull `lw` algorithm)
+
+```{r}
+# First we should observe the prior probability to compare
+# TRUE is for empty evidence
+cpquery(asia, event = lung == "yes", evidence = TRUE)
+```
+```{r}
+cpquery(asia, event = lung == "yes", evidence = (smoke == "yes"))
+```
+
+Notice that the method is not much stable, so it is better to aggregate a repeated sample of predictions:
+
+```{r}
+print(mean(rep(cpquery(asia, event = lung == "yes", evidence = TRUE), 1000)))
+print(mean(rep(cpquery(asia, event = lung == "yes", evidence = (smoke == "yes")), 1000)))
+```
+
+The other option is to use `cpdist` to sample cases from the network for a set of nodes in the presence of some evidence, the usage is the same, and we can obtain more stability by increasing the size of the sample.
+
+```{r}
+s <- cpdist(asia, nodes = c("lung"), evidence = TRUE, n=1000)
+head(s)
+```
+
+We can even compute or plot of the distribution:
+
+```{r}
+summary(s)
+```
+
+```{r}
+ggplot(s, aes(x=lung)) + geom_bar()
+```
+
+---
+
+# Modeling with Bayesian Networks
+
+Now that we have a nice overview on the operation with `bnlearn` we will switch to an applied problem in which we want to build a model from a real context.
+
+## The problem
+
+We are part of a Data Science team from an IoT company that has developed new *Temperature* sensor to monitor data center rooms in order to detect and predict early refrigeration failures. The sensors were installed a year ago, and we need to create a model that would be able to detect specific heat outbreaks or global heating problems in the room.
+
+We are provided with a dataset consisting on a number of measures per day during the previous year for a total of *3 sensors* that have been places in strategic places across room.
+
+We will start to work on the first version of the problem `heatAlarm-lvl1.csv`.
+
+```{r}
+dataRaw <- read_csv("./data/heatAlarm-lvl1.csv")
+head(dataRaw)
+```
+
+## Exploratory analisys
+
+We will start by studying the properties of our problem at hand. First we should look into the distribution of the dataset.
+
+```{r}
+summary(dataRaw)
+```
+
+We see that we have a complete year of measures and different ranges for each sensor. Now it is interesting to see the completeness of the data, we would also like to se its distribution along dates.
+
+```{r}
+dataRaw %>%
+  group_by(Date) %>%
+  summarise(Measures = n()) %>%
+  ggplot(aes(x=Measures)) + geom_histogram()
+```
+
+We confirm that the number of measures is stable during the day. We would now observe the distribution of the Temperature measures for each sensor.
+
+```{r}
+dataRaw %>%
+  gather("Sensor", "Measure", TS1, TS2, TS3) %>%
+  ggplot(aes(x=Date, y=Measure, group=Sensor, color=Sensor)) +
+  geom_line()
+
+dataRaw %>%
+  gather("Sensor", "Measure", TS1, TS2, TS3) %>%
+  ggplot(aes(x=Date, y=Measure, group=Sensor, color=Sensor)) +
+  geom_smooth()
+
+dataRaw %>%
+  gather("Sensor", "Measure", TS1, TS2, TS3) %>%
+  ggplot(aes(x=Date, y=Measure, group=Sensor, color=Sensor)) +
+  geom_boxplot()
+```
+
+We observe three different distributions for each sensor. Visually they appear to be some linear variation, in fact, a simple additive relationship that could be modelled by adding a scalar intercept value. This **dependency** relationship can be modelled in a BN, but, what is the best way to do it?
+
+## Latent variables
+
+The solution is elegant from the computational and the statistical point of view. We can think that the sensors are **measuring** some real and not observable temperature from the environment. This hidden value conditions the exact measures that the sensors capture, and thus can model its individual distributions.
+
+In other words, our model requires an additional variable, more concretelly a **Temp** latent variable that cannot be observed but that is captured by each sensor by following a particular dependency, we will represent this by adding a new variable to our data (we will also remove unused variables).
+
+```{r}
+dataLatent <- dataRaw %>% 
+  mutate(Temp = NA) %>%
+  select(Temp, TS1, TS2, TS3) %>%
+  as.data.frame()
+
+dataLatent$Temp <- as.numeric(dataLatent$Temp)
+```
+
+The next step is to estimate this variable to complete our model. We can learn the three network distributions from the data but not the Temp variable. For that we would use the `EM` algorithm. First, lets build the model:
+
+```{r}
+heatAlarmDag1 <- model2network("[Temp][TS1|Temp][TS2|Temp][TS3|Temp]")
+plotD3bn(heatAlarmDag1)
+```
+
+
+Now for the EM, unfortunatelly `bnlearn` does not provide a standalone implementation of this algorithm (it does for structural learning EM which is a superset), but it provides the tools to to so. Basically, the parametric EM algorithm can be implemented by:
+
+* **E step:** Impute the missing variables in the data by using Bayesian estimation from the actual model.
+* **M step:** Learning new parameters for the model by maximizing the likelihood from the imputten data (MLE).
+
+As you can imagine these steps would be repetead though a number of iterations or convergence. To impute the latent variables we will use the function `inpute`, **however**, we would need an initial model to do so. This is another important element for the EM algorithm, as we would need a good guess to ensure a proper fit.
+
+Lets first try with a random initialization of Temp
+
+```{r}
+# Lets add uniform Temp 
+dataImputed <- dataLatent %>% rowwise() %>% mutate(Temp = runif(1, 10, 25))
+
+dataImputed %>%
+  ggplot(aes(x=Temp)) + geom_density()
+```
+
+The EM algorithm is then plain simple
+
+```{r}
+parametric.em <- function(dag, dataLatent, dataImputed, iter = 5) {
+  fitted <- bn.fit(dag, dataImputed, method = "mle")
+  for ( i in seq(iter)) {
+   complete <- impute(fitted, data = dataLatent, method = "bayes-lw")
+   fitted <- bn.fit(dag, complete, method = "mle")
+  }
+  fitted
+}
+```
+
+Let's try it
+
+```{r}
+heatAlarmModel1 <- parametric.em(heatAlarmDag1, dataLatent, dataImputed, iter = 10)
+```
+
+Lets see the resulting model:
+
+```{r}
+heatAlarmModel1
+
+# Sample some data and plot it
+impute(heatAlarmModel1, data = dataLatent, method = "bayes-lw") %>%
+gather("Sensor", "Measure") %>%
+ggplot(aes(x=Measure, color=Sensor)) + geom_density()
+```
+
+Look at those intercept coefficient, they do not look right. As we can see in the plot it seems like a forced fit, where the Temp variable has a very different distribution. Lets try another guess at the prior for Temp, this time we will use a Gaussian distribution with the ststistics drawn from the sensors.
+
+
+```{r}
+
+statistics <- dataLatent %>% 
+  gather("Sensor", "Measure", TS1, TS2, TS3) %>%
+  summarise( 
+    mu    = mean(Measure),
+    sigma = sd(Measure)
+  )
+
+dataImputed <- dataLatent %>% 
+  rowwise() %>% 
+  mutate(Temp = rnorm(1, statistics$mu, statistics$sigma))
+
+dataImputed %>%
+  ggplot(aes(x=Temp)) + geom_density()
+```
+
+Let's repeat the EM:
+
+```{r}
+heatAlarmModel1 <- parametric.em(heatAlarmDag1, dataLatent, dataImputed, iter = 10)
+```
+
+```{r}
+heatAlarmModel1
+
+# Sample some data and plot it
+impute(heatAlarmModel1, data = dataLatent, method = "bayes-lw") %>%
+gather("Sensor", "Measure") %>%
+ggplot(aes(x=Measure, color=Sensor)) + geom_density()
+```
+
+This time the fit is even worse, as we overfitted a bad prior. We will try to make a better guess, this time depedant on the actual value of the sensors.
+
+
+
+```{r}
+dataImputed <- dataLatent %>% 
+  rowwise() %>% 
+  mutate(Temp = mean(c(TS1, TS2, TS3)))
+
+dataImputed %>%
+  ggplot(aes(x=Temp)) + geom_density()
+```
+
+```{r}
+heatAlarmModel1 <- parametric.em(heatAlarmDag1, dataLatent, dataImputed, iter = 10)
+```
+
+```{r}
+heatAlarmModel1
+
+# Sample some data and plot it
+impute(heatAlarmModel1, data = dataLatent, method = "bayes-lw") %>%
+gather("Sensor", "Measure") %>%
+ggplot(aes(x=Measure, color=Sensor)) + geom_density()
+```
+
+Now it seems that we got a nice fit, the density graph represents the sensors as scalar transformations of the latent Temp variable.
+
+
+## Modeling the domain
+
+If we go back to the plot showing the evolution of the temperature along the year we can see that there could be different distributions for different periods of time. If we can obtain this discriminative information we could do better modeling the domain.
+
+We will start by discriminating the distribution by month:
+
+```{r}
+dataByMonth <- dataRaw %>%
+  mutate(Month = as.factor(month(Date, label = TRUE, abbr = TRUE)))
+
+dataByMonth %>%
+  gather("Sensor", "Measure", TS1, TS2, TS3) %>%
+  ggplot(aes(x=Measure, color=Sensor, fill=Sensor)) + 
+    geom_density(alpha=0.5) +
+    facet_wrap(~Month)
+```
+
+It really seems that the month can capture additional information about the distribution. In this case, we would obtain a better fit to the data if we condition the Month as a discrete parent for the Temp variable. In this case we would need parameters for 12 different gaussian distributions, which may be a bit overkill.
+
+Let's try if we could summarise the month information by creating a lower dimensional variable. If we think about the weather domain we rapidly come up with the year's seasons. Let's try to discriminate the distributions by season.
+
+```{r}
+# Lubridate cant extract seasons so we need a custom function
+
+# We better encode the states as a dict to avoid magic strings
+SeasonStates <- list(
+  Winter = "winter",
+  Spring = "spring",
+  Summer = "summer",
+  Fall = "fall"
+)
+
+season <- function(date){
+  WS <- as.Date("2012-12-15", format = "%Y-%m-%d") # Winter Solstice
+  SE <- as.Date("2012-3-15",  format = "%Y-%m-%d") # Spring Equinox
+  SS <- as.Date("2012-6-15",  format = "%Y-%m-%d") # Summer Solstice
+  FE <- as.Date("2012-9-15",  format = "%Y-%m-%d") # Fall Equinox
+  
+  # Convert dates from any year to 2012 dates
+  d <- as.Date(strftime(date, format="2012-%m-%d"))
+  
+  factor(
+    ifelse (d >= WS | d < SE, SeasonStates$Winter,
+      ifelse (d >= SE & d < SS, SeasonStates$Spring,
+        ifelse (d >= SS & d < FE, SeasonStates$Summer, SeasonStates$Fall))),
+    levels = SeasonStates
+  )
+}
+
+dataBySeason <- dataByMonth %>%
+  mutate(Season = season(Date))
+
+dataBySeason %>%
+  gather("Sensor", "Measure", TS1, TS2, TS3) %>%
+  ggplot(aes(x=Measure, color=Sensor, fill=Sensor)) + 
+    geom_density(alpha=0.5) +
+    facet_wrap(~Season)
+```
+
+The distributions for the season discrimination seems less Gaussian, but they encode the same pattern. Lets try to model both networks and see how well they fit the parameters.
+
+First we will model the Month based one :
+
+```{r}
+dataLatent <- dataByMonth %>%
+  mutate(Temp = NA) %>%
+  select(Month, Temp, TS1, TS2, TS3) %>%
+  as.data.frame()
+
+dataLatent$Temp <- as.numeric(dataLatent$Temp)
+```
+
+And now we model the network DAG
+
+```{r}
+heatAlarmDagMonth <- model2network("[Month][Temp|Month][TS1|Temp][TS2|Temp][TS3|Temp]")
+plotD3bn(heatAlarmDagMonth)
+```
+
+Lets repeat the EM example and induce the parameters of the hidden variable with the previous successful configuration.
+
+```{r}
+dataImputed <- dataLatent %>% 
+  rowwise() %>% 
+  mutate(Temp = mean(c(TS1, TS2, TS3))) %>%
+  as.data.frame()
+```
+
+```{r}
+heatAlarmModelMonth <- parametric.em(heatAlarmDagMonth, dataLatent, dataImputed, iter = 10)
+```
+
+```{r}
+impute(heatAlarmModelMonth, data = dataLatent, method = "bayes-lw") %>%
+  gather("Sensor", "Measure", Temp, TS1, TS2, TS3) %>%
+  ggplot(aes(x=Measure, color=Sensor, fill=Sensor)) + 
+    geom_density(alpha=0.5) +
+    facet_wrap(~Month)
+```
+
+This is a very good fit indeed. We can see that Temp is almost identical to TS3, and that the other two sensors are just transformations of this variable. Lets check it the season is a good simplification of the Month variable.
+
+```{r}
+dataLatent <- dataBySeason %>%
+  mutate(Temp = NA) %>%
+  select(Season, Temp, TS1, TS2, TS3) %>%
+  as.data.frame()
+
+dataLatent$Temp <- as.numeric(dataLatent$Temp)
+
+heatAlarmDagSeason <- model2network("[Season][Temp|Season][TS1|Temp][TS2|Temp][TS3|Temp]")
+
+dataImputed <- dataLatent %>% 
+  rowwise() %>% 
+  mutate(Temp = mean(c(TS1, TS2, TS3))) %>%
+  as.data.frame()
+```
+
+With that configuration we run the EM
+
+```{r}
+heatAlarmModelSeason <- parametric.em(heatAlarmDagSeason, dataLatent, dataImputed, iter = 10)
+```
+
+```{r}
+impute(heatAlarmModelSeason, data = dataLatent, method = "bayes-lw") %>%
+  gather("Sensor", "Measure", Temp, TS1, TS2, TS3) %>%
+  ggplot(aes(x=Measure, color=Sensor, fill=Sensor)) + 
+    geom_density(alpha=0.5) +
+    facet_wrap(~Season)
+```
+
+Another good fit. Which one of the two approaches is better?. The initial guess should be the Season one, as it has fewer parameters than using the Month. Let's ask the BIC score.
+
+```{r}
+dataLatent <- dataBySeason %>%
+  mutate(Temp = NA) %>%
+  select(Season, Temp, TS1, TS2, TS3) %>%
+  as.data.frame()
+dataLatent$Temp <- as.numeric(dataLatent$Temp)
+
+sampleSeason <- impute(heatAlarmModelSeason, data = dataLatent, method = "bayes-lw")
+
+
+dataLatent <- dataByMonth %>%
+  mutate(Temp = NA) %>%
+  select(Month, Temp, TS1, TS2, TS3) %>%
+  as.data.frame()
+dataLatent$Temp <- as.numeric(dataLatent$Temp)
+
+sampleMonth  <- impute(heatAlarmModelMonth, data = dataLatent, method = "bayes-lw")
+
+print(BIC(heatAlarmModelSeason, sampleSeason))
+print(BIC(heatAlarmModelMonth, sampleMonth))
+```
+As expected, season is by far more superior at minimizing BIC than month and should be our pick.
+
+
+## Modeling anomalies
+
+One of the most appealing aspects of Bayesian Networks is the ability to include expert knowledge in the model. While this is almost impossible in other frameworks it is a natural concepts in this case.
+
+We call BNs open box models because we can understand and interpretate the parameters. This is really useful for modelling anomalies, because we can use latent variables and expert knowledge to represent events that cannot be observed.
+
+If the events cannot be observed we would not have available data to learn from. In our example we would have to destroy machines and lit the room on fire to capture data about anomalies, and that would surely have a high cost. Imagine other scenarios such as rare diseases, autonomous driving or financial fraud.
+
+
+
+---
+
+---
 
 # License
 
 This tutorial is licensed under [GPL3 license](https://www.gnu.org/licenses/lgpl-3.0.en.html) as is originally published and maintained in this [github repository](https://github.com/jacintoArias/bayesnetRtutorial) by [Jacinto Arias](http://jarias.es)
-
