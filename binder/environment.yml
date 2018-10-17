@@ -1,0 +1,5 @@
+dependencies:
+  - python
+  - rise
+  - pip:
+      - jupyter-contrib-nbextensions
